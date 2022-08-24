@@ -1,0 +1,152 @@
+----     PISO DESIGN CODE    ----
+
+module piso(pclk_i, prst_i, sclk_i, data_i, valid_i, ready_o, data_o, valid_o, ready_i);
+parameter s_fifo_empty = 3'b001;
+parameter s_rd_fifo = 3'b010;
+parameter s_drive_serial_intf = 3'b100;
+
+input pclk_i, prst_i, sclk_i;
+input [7:0] data_i;
+input valid_i;
+output reg ready_o;
+output reg data_o;
+output reg valid_o;
+input ready_i;
+
+reg [7:0] wr_data_t;
+reg wr_en_t;
+wire full_t;
+reg [7:0] rd_data_t;
+reg rd_en_t;
+wire empty_t;
+wire wr_error_t;
+wire rd_error_t;
+reg [2:0] state, next_state;
+integer count;
+
+// block#1
+always @(posedge pclk_i) begin
+  if (prst_i ==1) begin
+     ready_o = 0;
+	 data_o = 0;
+	 valid_o = 0;
+	 wr_data_t = 0;
+	 wr_en_t = 0;
+	 rd_en_t = 0;
+	 state = s_fifo_empty;
+	 next_state = s_fifo_empty;
+  end
+  else begin
+    if(valid_i == 1 && full_t == 0) begin
+	  wr_en_t = 1;
+	  wr_data_t = data_i;
+	  ready_o = 1;
+	end
+	else begin
+	    wr_en_t = 0;
+		ready_o = 0;
+	end
+end
+end
+
+//block#2
+
+fifo dut(.wr_clk(pclk_i), .rd_clk(sclk_i), .rst(prst_i), .wdata(wr_data_t), .full(full_t),
+ .wr_en(wr_en_t), .wr_error(wr_error_t), .rdata(rd_data_t), .empty(empty_t), .rd_en(rd_en_t), .rd_error(rd_error_t));
+
+// block #3 & 4
+
+always @(posedge sclk_i) begin
+if (prst_i == 0) begin
+case (state)
+ s_fifo_empty: begin
+    if (empty_t == 0) begin
+      next_state = s_rd_fifo;
+	  rd_en_t = 1;
+	end
+ end
+ s_rd_fifo: begin
+    rd_en_t = 0;
+    next_state = s_drive_serial_intf;
+	data_to_drive = rd_data_t;
+	count = 0;
+ end
+ s_drive_serial_intf: begin
+    data_o = data_to_drive(count);
+	valid_o = 1;
+	if (ready_i) count = count+1; //if block#4 ready to accept the data then we can send the next data
+	if(count == 0) begin
+	   count = 0;
+	   valid_o = 0;
+	   if (empty_t == 1) next_state =s_fifo_empty;
+	    else begin
+		   next_state = s_rd_fifo;
+		   rd_en_t = 1; // in order to read the data from wr_data_t
+		end
+	end
+ end
+endcase
+end
+end
+always @(next_state) state = next_state;
+endmodule
+
+
+
+
+-----     test bench  PISO      ----
+
+module tb;
+
+parameter s_fifo_empty = 3'b001;
+parameter s_rd_fifo = 3'b010;
+parameter s_drive_serial_intf = 3'b100;
+
+reg pclk_i, prst_i, sclk_i;
+reg [7:0] data_i;
+reg valid_i;
+wire ready_o;
+wire data_o;
+wire valid_o;
+reg ready_i;
+integer i;
+
+
+piso dut(pclk_i, prst_i, sclk_i, data_i, valid_i, ready_o, data_o, valid_o, ready_i);
+
+initial begin
+  pclk_i = 0;
+  forever #10 pclk_i = ~pclk_i;
+end
+
+initial begin
+  sclk_i = 0;
+  forever #1 sclk_i = ~sclk_i;
+end
+
+initial begin
+  prst_i = 1;
+   repeat(2) @(posedge pclk_i);
+  prst_i = 0;
+  // stimulus :: start driving parallel data in to design
+  for(i = 0; i < 10; i = i+1) begin
+    @(posedge pclk_i);
+	data_i = $random;
+	valid_i = 1;
+	wait (ready_o == 1);
+  end
+  @(posedge pclk_i);
+	data_i = 0;
+	valid_i = 0;
+	#500;
+	$finish;  
+end
+
+always @(posedge sclk_i) begin
+    if(valid_o) begin
+	   ready_i = 1;
+	   $display("%t : serial_data = %b", $time, data_o );
+	end
+	else ready_i = 0;
+end
+endmodule
